@@ -1,0 +1,20 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../../providers/app_state_provider.dart';
+import '../../providers/theme_provider.dart';
+import '../../services/api_service.dart';
+import '../../services/teacher_service.dart';
+
+enum ActionType {
+  studentRegistration,
+  studentDetails,
+  teacherDetails,
+}
+
+class TeacherHomeScreen extends StatefulWidget {
+  const TeacherHomeScreen({super.key});
+
+  @override
+  State<TeacherHomeScreen> createState() => _TeacherHomeScreenState();
+}
