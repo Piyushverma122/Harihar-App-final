@@ -2,18 +2,32 @@ class ApiConfig {
   // Base URL for the backend API
   // Choose the appropriate URL based on your device:
 
-  // For Android Emulator:
+  // Production server URL
+  // ignore: unused_field
+  static const String _productionUrl = 'http://165.22.208.62:5003';
+
+  // For Android Emulator (if needed for local testing):
+  // ignore: unused_field
   static const String _androidEmulatorUrl = 'http://10.0.2.2:5003';
 
   // For Physical Device or iOS Simulator (use your computer's IP):
-  static const String _physicalDeviceUrl = 'http://192.168.1.3:5003';
+  // ignore: unused_field
+  static const String _physicalDeviceUrl = 'http://192.168.1.7:5003';
 
   // For Desktop/Web development:
+  // ignore: unused_field
   static const String _desktopUrl = 'http://127.0.0.1:5003';
 
-  // Current active URL - Change this based on your testing device
-  static const String baseUrl =
-      _androidEmulatorUrl; // Switch between the above URLs
+  // Flexible base URL with build-time configuration
+  // Default to production server for live app usage
+  // Override with: flutter run --dart-define=API_BASE=<url>
+  // Example URLs available:
+  // - Production: flutter run --dart-define=API_BASE=$_productionUrl
+  // - Emulator: flutter run --dart-define=API_BASE=$_androidEmulatorUrl
+  // - Physical: flutter run --dart-define=API_BASE=$_physicalDeviceUrl
+  // - Desktop: flutter run --dart-define=API_BASE=$_desktopUrl
+  static const String baseUrl = String.fromEnvironment('API_BASE',
+      defaultValue: 'http://165.22.208.62:5003');
 
   // API Endpoints
   static const String loginEndpoint = '/login';

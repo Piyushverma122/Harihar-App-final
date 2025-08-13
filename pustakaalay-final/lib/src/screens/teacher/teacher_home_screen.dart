@@ -142,7 +142,7 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
       appBar: AppBar(
         title: Text(appState.loggedInUser != null
             ? 'स्वागत, ${appState.loggedInUser}'
-            : 'स्वागत, शिक्षक'),
+            : 'स्वागत'),
         backgroundColor: AppTheme.primaryGreen,
         elevation: 0,
         actions: [
@@ -212,14 +212,6 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
                         color: AppTheme.white,
                         fontSize: 22,
                         fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'शिक्षक डैशबोर्ड',
-                      style: TextStyle(
-                        color: AppTheme.white,
-                        fontSize: 16,
                       ),
                     ),
                   ],

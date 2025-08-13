@@ -258,6 +258,76 @@ class ApiService {
     }
   }
 
+  // Get school details by UDISE code
+  static Future<Map<String, dynamic>> getSchoolByUdise(String udiseCode) async {
+    try {
+      print('🏫 Fetching school data for UDISE: $udiseCode');
+      print('🏫 URL: ${ApiConfig.fetchSchoolUrl}');
+
+      final response = await http.get(
+        Uri.parse(ApiConfig.fetchSchoolUrl),
+        headers: headers,
+      );
+
+      print('🏫 Response Status: ${response.statusCode}');
+      print('🏫 Response Body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final responseData = jsonDecode(response.body);
+
+        // If the API returns all schools, find the one with matching UDISE
+        if (responseData['status'] == true && responseData['data'] != null) {
+          final dynamic schoolsData = responseData['data'];
+
+          if (schoolsData is List) {
+            final List<dynamic> schools = schoolsData;
+
+            // Find school with matching UDISE code
+            final school = schools.firstWhere(
+              (school) => school['udise_code']?.toString() == udiseCode,
+              orElse: () => null,
+            );
+
+            if (school != null) {
+              return {
+                'success': true,
+                'statusCode': response.statusCode,
+                'data': school,
+              };
+            } else {
+              return {
+                'success': false,
+                'statusCode': 404,
+                'data': {'message': 'इस UDISE कोड के लिए स्कूल नहीं मिला'},
+              };
+            }
+          }
+        }
+      }
+
+      return {
+        'success': false,
+        'statusCode': response.statusCode,
+        'data': {'message': 'स्कूल की जानकारी प्राप्त करने में त्रुटि'},
+      };
+    } catch (e) {
+      print('🏫 Error fetching school data: $e');
+
+      String errorMessage;
+      if (e.toString().contains('SocketException')) {
+        errorMessage = 'इंटरनेट कनेक्शन की जांच करें';
+      } else {
+        errorMessage = 'स्कूल की जानकारी लोड करने में त्रुटि: $e';
+      }
+
+      return {
+        'success': false,
+        'statusCode': 0,
+        'data': {'message': errorMessage},
+      };
+    }
+  }
+
   // Student registration endpoint
   static const String registrationEndpoint = '/register';
 
@@ -272,9 +342,10 @@ class ApiService {
     String? mobile, // Keep mobile as optional but don't send to backend
     required String nameOfTree,
     required File plantImage,
-    required File certificateImage,
     required String udiseCode,
     required String dinank, // Changed from employeeId to dinank (date)
+    double? latitude, // Optional latitude
+    double? longitude, // Optional longitude
   }) async {
     try {
       print('🔍 Pre-upload file validation...');
@@ -284,38 +355,37 @@ class ApiService {
         throw Exception('Plant image file does not exist: ${plantImage.path}');
       }
 
-      if (!await certificateImage.exists()) {
-        throw Exception(
-            'Certificate image file does not exist: ${certificateImage.path}');
-      }
-
       final int plantSize = await plantImage.length();
-      final int certSize = await certificateImage.length();
 
       if (plantSize == 0) {
         throw Exception('Plant image file is empty');
       }
 
-      if (certSize == 0) {
-        throw Exception('Certificate image file is empty');
-      }
-
       print('✅ File validation passed:');
       print('  Plant image: ${plantImage.path} (${plantSize} bytes)');
-      print('  Certificate: ${certificateImage.path} (${certSize} bytes)');
 
       // Create multipart request
       final request = http.MultipartRequest('POST', Uri.parse(registrationUrl));
 
       // Add form fields - According to new backend schema
-      request.fields.addAll({
+      final Map<String, String> formFields = {
         'name': name,
         'school_name': schoolName,
         'class': className,
         'name_of_tree': nameOfTree,
         'udise_code': udiseCode,
         'dinank': dinank, // Backend expects dinank (date)
-      });
+      };
+
+      // Add location data if available
+      if (latitude != null) {
+        formFields['latitude'] = latitude.toString();
+      }
+      if (longitude != null) {
+        formFields['longitude'] = longitude.toString();
+      }
+
+      request.fields.addAll(formFields);
 
       print('=== STUDENT REGISTRATION DEBUG ===');
       print('Dinank (Date) being sent: $dinank');
@@ -333,16 +403,6 @@ class ApiService {
         print('✅ Plant image added to request');
       } catch (e) {
         throw Exception('Failed to add plant image to request: $e');
-      }
-
-      try {
-        request.files.add(await http.MultipartFile.fromPath(
-          'certificate',
-          certificateImage.path,
-        ));
-        print('✅ Certificate image added to request');
-      } catch (e) {
-        throw Exception('Failed to add certificate image to request: $e');
       }
 
       print('Student Registration Request Fields: ${request.fields}');
@@ -1326,6 +1386,181 @@ class ApiService {
     } catch (e) {
       print('Error checking upload eligibility: $e');
       return false;
+    }
+  }
+
+  // Update student status
+  static Future<Map<String, dynamic>> updateStudentStatus({
+    required String studentName,
+    required String udiseCode,
+    required String status,
+  }) async {
+    try {
+      print('📝 Updating student status...');
+      print('  Student: $studentName');
+      print('  UDISE: $udiseCode');
+      print('  Status: $status');
+
+      // Create form data
+      final Map<String, String> formData = {
+        'student_name': studentName,
+        'udise_code': udiseCode,
+        'status': status,
+      };
+
+      print('📤 Sending status update request...');
+
+      // Send request
+      final response = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}/update_student_status'),
+        headers: headers,
+        body: jsonEncode(formData),
+      );
+
+      print('📋 Status update response:');
+      print('  Status: ${response.statusCode}');
+      print('  Body: ${response.body}');
+
+      // Check if response body is empty
+      if (response.body.isEmpty) {
+        return {
+          'success': false,
+          'statusCode': response.statusCode,
+          'data': {'message': 'सर्वर से कोई जवाब नहीं मिला।'},
+        };
+      }
+
+      final responseData = jsonDecode(response.body);
+
+      return {
+        'success': response.statusCode == 200 && responseData['status'] == true,
+        'statusCode': response.statusCode,
+        'data': responseData,
+      };
+    } catch (e) {
+      print('❌ Status update error: $e');
+      return {
+        'success': false,
+        'statusCode': 0,
+        'data': {'message': 'नेटवर्क त्रुटि: $e'},
+      };
+    }
+  }
+
+  // Check re-photo eligibility (4+ days since submission)
+  static Future<Map<String, dynamic>> checkRePhotoEligibility({
+    required String studentName,
+    required String udiseCode,
+  }) async {
+    try {
+      print('🔍 Checking re-photo eligibility...');
+      print('  Student: $studentName');
+      print('  UDISE: $udiseCode');
+
+      final requestBody = {
+        'student_name': studentName,
+        'udise_code': udiseCode,
+      };
+
+      final response = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}/check_re_photo_eligibility'),
+        headers: headers,
+        body: jsonEncode(requestBody),
+      );
+
+      print('📋 Eligibility check response:');
+      print('  Status: ${response.statusCode}');
+      print('  Body: ${response.body}');
+
+      if (response.body.isEmpty) {
+        return {
+          'success': false,
+          'statusCode': response.statusCode,
+          'data': {'message': 'सर्वर से कोई जवाब नहीं मिला।'},
+        };
+      }
+
+      final responseData = jsonDecode(response.body);
+
+      return {
+        'success': response.statusCode == 200 && responseData['status'] == true,
+        'statusCode': response.statusCode,
+        'data': responseData,
+      };
+    } catch (e) {
+      print('❌ Eligibility check error: $e');
+      return {
+        'success': false,
+        'statusCode': 0,
+        'data': {'message': 'नेटवर्क त्रुटि: $e'},
+      };
+    }
+  }
+
+  // Upload re-photo after 4+ days
+  static Future<Map<String, dynamic>> uploadRePhoto({
+    required String studentName,
+    required String udiseCode,
+    required File photoFile,
+  }) async {
+    try {
+      print('📤 Uploading re-photo...');
+      print('  Student: $studentName');
+      print('  UDISE: $udiseCode');
+      print('  File: ${photoFile.path}');
+
+      // Create multipart request
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('${ApiConfig.baseUrl}/upload_re_photo'),
+      );
+
+      // Add headers
+      request.headers.addAll(multipartHeaders);
+
+      // Add form fields
+      request.fields['student_name'] = studentName;
+      request.fields['udise_code'] = udiseCode;
+
+      // Add file
+      final file = await http.MultipartFile.fromPath(
+        'photo',
+        photoFile.path,
+      );
+      request.files.add(file);
+
+      print('📤 Sending re-photo upload request...');
+
+      // Send request
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+
+      print('📋 Re-photo upload response:');
+      print('  Status: ${response.statusCode}');
+      print('  Body: ${response.body}');
+
+      if (response.body.isEmpty) {
+        return {
+          'success': false,
+          'statusCode': response.statusCode,
+          'data': {'message': 'सर्वर से कोई जवाब नहीं मिला।'},
+        };
+      }
+
+      final responseData = jsonDecode(response.body);
+
+      return {
+        'success': response.statusCode == 200 && responseData['status'] == true,
+        'statusCode': response.statusCode,
+        'data': responseData,
+      };
+    } catch (e) {
+      print('❌ Re-photo upload error: $e');
+      return {
+        'success': false,
+        'statusCode': 0,
+        'data': {'message': 'नेटवर्क त्रुटि: $e'},
+      };
     }
   }
 }

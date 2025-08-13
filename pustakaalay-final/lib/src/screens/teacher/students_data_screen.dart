@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
 import 'dart:io';
 import '../../providers/app_state_provider.dart';
 import '../../services/api_service.dart';
@@ -18,6 +19,8 @@ class _StudentsDataScreenState extends State<StudentsDataScreen> {
   final TextEditingController _searchController = TextEditingController();
   final ImagePicker _picker = ImagePicker();
   bool _isLoading = true;
+  // Guard to prevent duplicate navigator pops / multiple parallel uploads causing black screen
+  bool _isUploadingRePhoto = false;
   String _errorMessage = '';
   final Set<int> _expandedIndices = {}; // Track which cards are expanded
   int _studentsNeedingPhotoUpdate = 0;
@@ -25,6 +28,9 @@ class _StudentsDataScreenState extends State<StudentsDataScreen> {
   // Filter variables
   String? _selectedClass;
   List<String> _availableClasses = [];
+
+  // Status update controllers - one for each student
+  final Map<String, TextEditingController> _statusControllers = {};
 
   @override
   void initState() {
@@ -37,6 +43,11 @@ class _StudentsDataScreenState extends State<StudentsDataScreen> {
   void dispose() {
     _searchController.removeListener(_onSearchChanged);
     _searchController.dispose();
+    // Dispose all status controllers
+    for (final controller in _statusControllers.values) {
+      controller.dispose();
+    }
+    _statusControllers.clear();
     super.dispose();
   }
 
@@ -51,41 +62,105 @@ class _StudentsDataScreenState extends State<StudentsDataScreen> {
     }
 
     try {
-      return DateTime.parse(dateString);
+      print('🔄 [DATE] Attempting to parse: "$dateString"');
+
+      // Handle RFC-7231 HTTP date format: "Thu, 07 Aug 2025 01:01:08 GMT"
+      if (dateString.contains(',') && dateString.endsWith('GMT')) {
+        try {
+          // Split and parse the format: "Thu, 07 Aug 2025 01:01:08 GMT"
+          final parts = dateString.trim().split(' ');
+          if (parts.length >= 5) {
+            final day = int.parse(parts[1]);
+            final monthName = parts[2];
+            final year = int.parse(parts[3]);
+
+            // Parse time if available
+            final timePart = parts.length > 4 ? parts[4] : '00:00:00';
+            final timeParts = timePart.split(':');
+            final hour = timeParts.length > 0 ? int.parse(timeParts[0]) : 0;
+            final minute = timeParts.length > 1 ? int.parse(timeParts[1]) : 0;
+            final second = timeParts.length > 2 ? int.parse(timeParts[2]) : 0;
+
+            final month = _getMonthNumber(monthName);
+
+            final parsedDate =
+                DateTime.utc(year, month, day, hour, minute, second);
+            print('✅ [DATE] Successfully parsed GMT date: $parsedDate');
+            return parsedDate;
+          }
+        } catch (e) {
+          print('❌ [DATE] Error parsing RFC format: $e');
+        }
+      }
+
+      // Handle simple date format: "2025-08-07"
+      if (RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(dateString)) {
+        final parsedDate = DateTime.parse(dateString);
+        print('✅ [DATE] Successfully parsed simple date: $parsedDate');
+        return parsedDate;
+      }
+
+      // Handle ISO format with milliseconds
+      if (dateString.contains('T') || dateString.contains('Z')) {
+        final parsedDate = DateTime.parse(dateString);
+        print('✅ [DATE] Successfully parsed ISO date: $parsedDate');
+        return parsedDate;
+      }
+
+      // Handle "YYYY-MM-DD HH:MM:SS" format
+      if (RegExp(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$')
+          .hasMatch(dateString)) {
+        final parsedDate = DateTime.parse(dateString);
+        print('✅ [DATE] Successfully parsed datetime: $parsedDate');
+        return parsedDate;
+      }
+
+      print('❌ [DATE] No matching format for: "$dateString"');
+      return null;
     } catch (e) {
-      print('Error parsing date: "$dateString" - $e');
+      print('❌ [DATE] Error parsing date "$dateString": $e');
       return null;
     }
+  }
+
+  // Helper to convert month name to number
+  int _getMonthNumber(String monthName) {
+    const months = {
+      'Jan': 1,
+      'Feb': 2,
+      'Mar': 3,
+      'Apr': 4,
+      'May': 5,
+      'Jun': 6,
+      'Jul': 7,
+      'Aug': 8,
+      'Sep': 9,
+      'Oct': 10,
+      'Nov': 11,
+      'Dec': 12
+    };
+    return months[monthName] ?? 1;
   }
 
   // Method to format date for display
   String _formatDate(String dateString) {
     try {
-      DateTime dateTime;
+      print('🔄 [FORMAT] Attempting to format: "$dateString"');
 
-      // Handle HTTP date format (Thu, 07 Aug 2025 01:01:08 GMT)
-      if (dateString.contains('GMT') || dateString.contains(',')) {
-        dateTime = DateTime.parse(dateString);
-      }
-      // Handle datetime format with T or space
-      else if (dateString.contains('T') || dateString.contains(' ')) {
-        dateTime = DateTime.parse(dateString);
-      }
-      // Handle date only format (YYYY-MM-DD)
-      else if (dateString.contains('-') && dateString.length == 10) {
-        dateTime = DateTime.parse(dateString);
-      }
-      // Fallback
-      else {
-        dateTime = DateTime.parse(dateString);
-      }
+      // Use the improved _parseDate method
+      final dateTime = _parseDate(dateString);
 
-      // Format as DD/MM/YYYY for display
-      return '${dateTime.day.toString().padLeft(2, '0')}/${dateTime.month.toString().padLeft(2, '0')}/${dateTime.year}';
+      if (dateTime != null) {
+        final formatted = DateFormat('dd/MM/yyyy').format(dateTime);
+        print('✅ [FORMAT] Successfully formatted: $formatted');
+        return formatted;
+      } else {
+        print('❌ [FORMAT] Failed to parse date, returning raw string');
+        return dateString;
+      }
     } catch (e) {
-      print('Error formatting date: $e');
-      print('Date string was: "$dateString"');
-      return 'तारीख ज्ञात नहीं';
+      print('❌ [FORMAT] Error formatting date "$dateString": $e');
+      return dateString;
     }
   }
 
@@ -415,6 +490,656 @@ class _StudentsDataScreenState extends State<StudentsDataScreen> {
     );
   }
 
+  // Check if re-photo upload is available with 6-upload limit and 30-day cooldown
+  bool _isRePhotoUploadAvailable(Map<String, dynamic> student) {
+    try {
+      // Check re-upload count limit (maximum 6)
+      final reuploadCount = (student['reupload_count'] ?? 0) as int;
+      if (reuploadCount >= 6) {
+        print('🔄 [RE-PHOTO] Maximum limit reached: $reuploadCount/6');
+        return false;
+      }
+
+      // Get dates
+      String? submissionDateString = student['date']?.toString();
+      String? lastReuploadDateString =
+          student['last_reupload_date']?.toString();
+
+      print('🔄 [RE-PHOTO] Student: ${student['student_name']}');
+      print('🔄 [RE-PHOTO] Re-upload count: $reuploadCount/6');
+      print('🔄 [RE-PHOTO] Raw date value: "${student['date']}"');
+      print('🔄 [RE-PHOTO] Raw last_reupload_date: "$lastReuploadDateString"');
+
+      // If date column is empty or invalid, use date_time as fallback
+      if (submissionDateString == null ||
+          submissionDateString.isEmpty ||
+          submissionDateString == 'N/A' ||
+          submissionDateString == 'null') {
+        submissionDateString = student['date_time']?.toString();
+        print(
+            '🔄 [RE-PHOTO] Using date_time as fallback: "$submissionDateString"');
+
+        if (submissionDateString == null ||
+            submissionDateString.isEmpty ||
+            submissionDateString == 'N/A' ||
+            submissionDateString == 'null') {
+          print('🔄 [RE-PHOTO] No valid date found, returning false');
+          return false;
+        }
+      }
+
+      print('🔄 [RE-PHOTO] Attempting to parse: "$submissionDateString"');
+
+      // Determine reference date based on re-upload count
+      DateTime? referenceDate;
+
+      if (reuploadCount == 0) {
+        // First re-upload: check against initial submission date
+        referenceDate = _parseDate(submissionDateString);
+        print(
+            '🔄 [RE-PHOTO] First re-upload - checking against submission date');
+      } else {
+        // Subsequent re-uploads: check against last re-upload date
+        if (lastReuploadDateString == null ||
+            lastReuploadDateString.isEmpty ||
+            lastReuploadDateString == 'N/A' ||
+            lastReuploadDateString == 'null') {
+          print('🔄 [RE-PHOTO] No last re-upload date found, returning false');
+          return false;
+        }
+
+        referenceDate = _parseDate(lastReuploadDateString);
+        print(
+            '🔄 [RE-PHOTO] Subsequent re-upload - checking against last re-upload date');
+      }
+
+      if (referenceDate == null) {
+        print('🔄 [RE-PHOTO] Failed to parse reference date, returning false');
+        return false;
+      }
+
+      // Use device's current date (not server date)
+      final currentDate = DateTime.now();
+      final daysSinceReference = currentDate.difference(referenceDate).inDays;
+
+      print('🔄 [RE-PHOTO] Reference Date: $referenceDate');
+      print('🔄 [RE-PHOTO] Current Date (Device): $currentDate');
+      print('🔄 [RE-PHOTO] Days Since Reference: $daysSinceReference');
+      print(
+          '🔄 [RE-PHOTO] Is Available (>=30 days): ${daysSinceReference >= 30}');
+
+      // Return true if 30+ days have passed and under the limit
+      return daysSinceReference >= 30;
+    } catch (e) {
+      print('🔄 [RE-PHOTO] Error calculating re-photo availability: $e');
+      print('🔄 [RE-PHOTO] Student data keys: ${student.keys.toList()}');
+      return false;
+    }
+  }
+
+  // Get days since relevant date for display (submission or last reupload)
+  int _getDaysSinceSubmission(Map<String, dynamic> student) {
+    try {
+      // Check re-upload count to determine reference date
+      final reuploadCount = (student['reupload_count'] ?? 0) as int;
+
+      String? referenceDateString;
+      String referenceType;
+
+      if (reuploadCount == 0) {
+        // Use initial submission date
+        referenceDateString = student['date']?.toString();
+        if (referenceDateString == null ||
+            referenceDateString.isEmpty ||
+            referenceDateString == 'N/A' ||
+            referenceDateString == 'null') {
+          referenceDateString = student['date_time']?.toString();
+        }
+        referenceType = "submission";
+      } else {
+        // Use last re-upload date
+        referenceDateString = student['last_reupload_date']?.toString();
+        referenceType = "last re-upload";
+      }
+
+      // Debug: Check what we're getting
+      print('🔍 [DATE DEBUG] Reference type: $referenceType');
+      print('🔍 [DATE DEBUG] Re-upload count: $reuploadCount');
+      print('🔍 [DATE DEBUG] Reference date string: "$referenceDateString"');
+
+      if (referenceDateString == null ||
+          referenceDateString.isEmpty ||
+          referenceDateString == 'N/A' ||
+          referenceDateString == 'null') {
+        print('🔍 [DATE DEBUG] No valid reference date found, returning 0');
+        return 0;
+      }
+
+      print('🔍 [DATE DEBUG] Attempting to parse: "$referenceDateString"');
+
+      // Use the improved _parseDate method for all formats
+      DateTime? referenceDate = _parseDate(referenceDateString);
+
+      if (referenceDate == null) {
+        print('🔍 [DATE DEBUG] Failed to parse reference date, returning 0');
+        return 0;
+      }
+
+      final currentDate = DateTime.now();
+      final daysDifference = currentDate.difference(referenceDate).inDays;
+
+      print('🔍 [DATE DEBUG] Parsed reference date: $referenceDate');
+      print('🔍 [DATE DEBUG] Current date: $currentDate');
+      print('🔍 [DATE DEBUG] Days difference: $daysDifference');
+
+      return daysDifference;
+    } catch (e) {
+      print('🔄 [RE-PHOTO] Error calculating days since reference: $e');
+      print('🔄 [RE-PHOTO] Student data keys: ${student.keys.toList()}');
+      return 0;
+    }
+  }
+
+  // Check if student has already uploaded re-photo
+  bool _hasRePhoto(Map<String, dynamic> student) {
+    final certificate = student['certificate']?.toString();
+    return certificate != null &&
+        certificate.isNotEmpty &&
+        certificate != 'N/A';
+  }
+
+  // Show re-photo upload dialog
+  void _showRePhotoUploadDialog(Map<String, dynamic> student) {
+    final daysSinceSubmission = _getDaysSinceSubmission(student);
+    final hasRePhoto = _hasRePhoto(student);
+    final isAvailable = _isRePhotoUploadAvailable(student);
+    final reuploadCount = (student['reupload_count'] ?? 0) as int;
+    final remainingUploads = 6 - reuploadCount;
+
+    // Use showModalBottomSheet for better image picker compatibility
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (BuildContext context) {
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom,
+            top: 20,
+            left: 20,
+            right: 20,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.camera_alt, color: Colors.green),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'पौधे की दोबारा तस्वीर',
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Text('छात्र: ${student['student_name']}'),
+              const SizedBox(height: 8),
+              Text('दोबारा अपलोड: $reuploadCount/6 बार'),
+              const SizedBox(height: 4),
+              if (remainingUploads > 0)
+                Text('बाकी अपलोड: $remainingUploads बार',
+                    style: const TextStyle(color: Colors.blue)),
+              const SizedBox(height: 16),
+
+              if (reuploadCount >= 6) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.red.withOpacity(0.3)),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.block, color: Colors.red, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'अधिकतम सीमा पूरी हो गई (6/6)',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w500, color: Colors.red),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ] else if (!isAvailable) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.access_time,
+                          color: Colors.orange, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'दोबारा तस्वीर ${30 - daysSinceSubmission} दिन बाद उपलब्ध होगी',
+                          style: const TextStyle(fontWeight: FontWeight.w500),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ] else if (hasRePhoto) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.green.withOpacity(0.3)),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.check_circle, color: Colors.green, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'दोबारा तस्वीर पहले से अपलोड की गई है',
+                        style: TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                    'नई तस्वीर अपलोड करने के लिए नीचे के विकल्प का उपयोग करें:'),
+              ] else ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.info, color: Colors.blue, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'अब आप पौधे की दोबारा तस्वीर अपलोड कर सकते हैं',
+                          style: TextStyle(fontWeight: FontWeight.w500),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ], // Fixed missing comma before closing
+              if (hasRePhoto) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.green.withOpacity(0.3)),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.check_circle, color: Colors.green, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'दोबारा तस्वीर पहले से अपलोड की गई है',
+                        style: TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
+              const SizedBox(height: 20),
+
+              // Action buttons
+              if (isAvailable) ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        icon: const Icon(Icons.camera_alt),
+                        label: const Text('कैमरा'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                        onPressed: () async {
+                          Navigator.of(context).pop();
+
+                          // Add delay to avoid dialog context issues
+                          await Future<void>.delayed(
+                              const Duration(milliseconds: 100));
+
+                          try {
+                            final XFile? image = await _picker.pickImage(
+                              source: ImageSource.camera,
+                              maxWidth: 1024,
+                              maxHeight: 1024,
+                              imageQuality: 85,
+                            );
+
+                            if (image != null) {
+                              await _uploadRePhoto(student, File(image.path));
+                            }
+                          } catch (e) {
+                            print('📷 Camera error: $e');
+                            if (!e.toString().contains('cancelled')) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('कैमरा खोलने में त्रुटि: $e'),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        icon: const Icon(Icons.photo_library),
+                        label: const Text('गैलरी'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blue,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                        onPressed: () async {
+                          Navigator.of(context).pop();
+
+                          // Add delay to avoid dialog context issues
+                          await Future<void>.delayed(
+                              const Duration(milliseconds: 100));
+
+                          try {
+                            final XFile? image = await _picker.pickImage(
+                              source: ImageSource.gallery,
+                              maxWidth: 1024,
+                              maxHeight: 1024,
+                              imageQuality: 85,
+                            );
+
+                            if (image != null) {
+                              await _uploadRePhoto(student, File(image.path));
+                            }
+                          } catch (e) {
+                            print('📷 Gallery error: $e');
+                            if (!e.toString().contains('cancelled')) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('गैलरी खोलने में त्रुटि: $e'),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+
+              const SizedBox(height: 10),
+
+              // Cancel button
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('बंद करें'),
+                ),
+              ),
+
+              const SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // Upload re-photo to server
+  Future<void> _uploadRePhoto(
+      Map<String, dynamic> student, File imageFile) async {
+    if (_isUploadingRePhoto) {
+      // Prevent duplicate submissions which can corrupt navigator stack
+      return;
+    }
+    _isUploadingRePhoto = true;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return const AlertDialog(
+          content: Row(
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(width: 16),
+              Text('दोबारा तस्वीर अपलोड हो रही है...'),
+            ],
+          ),
+        );
+      },
+    );
+
+    try {
+      // Call API to upload re-photo
+      final result = await ApiService.uploadRePhoto(
+        studentName: student['student_name'].toString(),
+        udiseCode: student['udise_code'].toString(),
+        photoFile: imageFile,
+      );
+
+      // Close loading dialog only if widget is still mounted
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.of(context).pop(); // Close loading dialog
+      }
+      if (!mounted) {
+        _isUploadingRePhoto = false;
+        return; // Widget is no longer mounted, exit early
+      }
+
+      if (result['success'] == true) {
+        // Get response data
+        final responseData = result['data'];
+
+        // Update the student data locally
+        final studentIndex = _allStudents.indexWhere(
+          (s) =>
+              s['student_name'] == student['student_name'] &&
+              s['udise_code'] == student['udise_code'],
+        );
+
+        if (studentIndex != -1) {
+          setState(() {
+            // Update certificate field with new re-photo path
+            if (responseData != null && responseData['re_photo_path'] != null) {
+              _allStudents[studentIndex]['certificate'] =
+                  responseData['re_photo_path'];
+            }
+            // Update re-upload count and last reupload date
+            if (responseData != null) {
+              _allStudents[studentIndex]['reupload_count'] =
+                  responseData['reupload_count'] ?? 0;
+              _allStudents[studentIndex]['last_reupload_date'] =
+                  responseData['upload_date'];
+            }
+          });
+          _filterStudents(_searchController.text);
+        }
+
+        // Show success message with remaining uploads info
+        final reuploadCount = responseData?['reupload_count'] ?? 0;
+        final remainingUploads = responseData?['remaining_uploads'] ?? 0;
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                'दोबारा तस्वीर सफलतापूर्वक अपलोड हो गई! ($reuploadCount/6) - $remainingUploads बार और अपलोड कर सकते हैं'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else {
+        String errorMessage = 'दोबारा तस्वीर अपलोड असफल';
+        final data = result['data'];
+        if (data != null) {
+          if (data['message'] != null) {
+            errorMessage = data['message'].toString();
+          } else if (data['data'] != null && data['data']['message'] != null) {
+            errorMessage = data['data']['message'].toString();
+          }
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMessage),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      // Close loading dialog only if widget is still mounted
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.of(context).pop(); // Close loading dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('नेटवर्क त्रुटि: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      _isUploadingRePhoto = false;
+    }
+  }
+
+  // Update student status
+  Future<void> _updateStudentStatus(
+      Map<String, dynamic> student, String statusText) async {
+    try {
+      // Get app state for UDISE code
+      final appState = Provider.of<AppStateProvider>(context, listen: false);
+      final String udiseCode = appState.udiseCode ?? '';
+
+      // Use the original name from backend (student_name is mapped from 'name' in database)
+      final String studentName = student['student_name']?.toString() ?? '';
+
+      print('📝 Updating status for: $studentName');
+      print('📝 Status text: $statusText');
+      print('📝 UDISE code: $udiseCode');
+
+      // Show loading indicator
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.white),
+              ),
+              SizedBox(width: 16),
+              Text('स्थिति अपडेट हो रही है...'),
+            ],
+          ),
+          duration: Duration(seconds: 2),
+        ),
+      );
+
+      // Call API to update student status
+      final result = await ApiService.updateStudentStatus(
+        studentName: studentName,
+        udiseCode: udiseCode,
+        status: statusText,
+      );
+
+      if (!mounted) return;
+
+      if (result['success'] == true) {
+        // Update the student data locally
+        final studentIndex = _allStudents.indexWhere(
+          (s) => s['student_name'] == studentName,
+        );
+
+        if (studentIndex != -1) {
+          setState(() {
+            _allStudents[studentIndex]['status'] = statusText;
+          });
+          _filterStudents(_searchController.text);
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('पौधे की स्थिति सफलतापूर्वक अपडेट हो गई! ✅'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else {
+        String errorMessage = 'स्थिति अपडेट असफल';
+        final data = result['data'];
+        if (data != null && data['message'] != null) {
+          errorMessage = data['message'].toString();
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMessage),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('नेटवर्क एरर: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  // Get or create status controller for a student
+  TextEditingController _getStatusController(Map<String, dynamic> student) {
+    final studentKey = '${student['student_name']}_${student['udise_code']}';
+
+    if (!_statusControllers.containsKey(studentKey)) {
+      final controller = TextEditingController();
+      // Set initial value from student data
+      controller.text = student['status']?.toString() ?? '';
+      _statusControllers[studentKey] = controller;
+    }
+
+    return _statusControllers[studentKey]!;
+  }
+
   Future<void> _fetchStudentsData() async {
     setState(() {
       _isLoading = true;
@@ -482,7 +1207,10 @@ class _StudentsDataScreenState extends State<StudentsDataScreen> {
                       studentData['phone_number']?.toString() ??
                       'N/A',
                   'date_time': studentData['date_time']?.toString() ?? 'N/A',
-                  // Note: Backend only has date_time column, no separate date column
+                  'date': studentData['date']?.toString() ??
+                      'N/A', // For re-photo eligibility check
+                  'certificate': studentData['certificate']?.toString() ??
+                      '', // For re-photo storage
                   'udise_code':
                       studentData['udise_code']?.toString() ?? udiseCode,
                   'school_name':
@@ -490,11 +1218,10 @@ class _StudentsDataScreenState extends State<StudentsDataScreen> {
                   'name_of_tree':
                       studentData['name_of_tree']?.toString() ?? 'N/A',
                   'plant_image': studentData['plant_image']?.toString() ?? '',
-                  'certificate': studentData['certificate']?.toString() ?? '',
-                  'verified': studentData['verified']?.toString() ?? 'false',
                   'last_photo_update':
                       studentData['last_photo_update']?.toString() ??
                           studentData['date_time']?.toString(),
+                  'status': studentData['status']?.toString() ?? '',
                 };
               }
               return <String, dynamic>{};
@@ -1179,6 +1906,96 @@ class _StudentsDataScreenState extends State<StudentsDataScreen> {
                                                         ),
                                                       ),
                                                     ),
+
+                                                  // Re-photo Upload Button (30+ days after submission)
+                                                  Builder(
+                                                    builder: (context) {
+                                                      final isRePhotoAvailable =
+                                                          _isRePhotoUploadAvailable(
+                                                              student);
+                                                      final daysSinceSubmission =
+                                                          _getDaysSinceSubmission(
+                                                              student);
+                                                      final hasRePhoto =
+                                                          _hasRePhoto(student);
+
+                                                      // Always show button, but with different styles based on availability
+                                                      return Padding(
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .only(top: 8),
+                                                        child: SizedBox(
+                                                          width:
+                                                              double.infinity,
+                                                          child: ElevatedButton
+                                                              .icon(
+                                                            onPressed: () {
+                                                              _showRePhotoUploadDialog(
+                                                                  student);
+                                                            },
+                                                            style:
+                                                                ElevatedButton
+                                                                    .styleFrom(
+                                                              backgroundColor: isRePhotoAvailable
+                                                                  ? (hasRePhoto
+                                                                      ? Colors.green[
+                                                                          600]
+                                                                      : Colors.blue[
+                                                                          600])
+                                                                  : Colors.grey[
+                                                                      400],
+                                                              foregroundColor:
+                                                                  Colors.white,
+                                                              padding:
+                                                                  const EdgeInsets
+                                                                      .symmetric(
+                                                                      horizontal:
+                                                                          16,
+                                                                      vertical:
+                                                                          10),
+                                                              shape:
+                                                                  RoundedRectangleBorder(
+                                                                borderRadius:
+                                                                    BorderRadius
+                                                                        .circular(
+                                                                            12),
+                                                              ),
+                                                              elevation:
+                                                                  isRePhotoAvailable
+                                                                      ? 2
+                                                                      : 1,
+                                                            ),
+                                                            icon: Icon(
+                                                              hasRePhoto
+                                                                  ? Icons
+                                                                      .check_circle
+                                                                  : (isRePhotoAvailable
+                                                                      ? Icons
+                                                                          .add_a_photo
+                                                                      : Icons
+                                                                          .access_time),
+                                                              size: 18,
+                                                            ),
+                                                            label: Text(
+                                                              hasRePhoto
+                                                                  ? 'दोबारा तस्वीर अपलोड की गई'
+                                                                  : (isRePhotoAvailable
+                                                                      ? 'दोबारा तस्वीर अपलोड करें'
+                                                                      : 'दोबारा तस्वीर (${30 - daysSinceSubmission} दिन बाद)'),
+                                                              style:
+                                                                  const TextStyle(
+                                                                fontSize: 14,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w600,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      );
+                                                    },
+                                                  ),
+
                                                   // Last upload info
                                                   if (student['date_time']
                                                           ?.toString()
@@ -1298,63 +2115,6 @@ class _StudentsDataScreenState extends State<StudentsDataScreen> {
                                                     },
                                                   ),
                                                 const SizedBox(width: 8),
-                                                // Verification status
-                                                Container(
-                                                  padding: const EdgeInsets
-                                                      .symmetric(
-                                                      horizontal: 10,
-                                                      vertical: 6),
-                                                  decoration: BoxDecoration(
-                                                    gradient: LinearGradient(
-                                                      colors:
-                                                          student['verified'] ==
-                                                                  'true'
-                                                              ? [
-                                                                  Colors.green
-                                                                      .shade100,
-                                                                  Colors.green
-                                                                      .shade50
-                                                                ]
-                                                              : [
-                                                                  Colors.red
-                                                                      .shade100,
-                                                                  Colors.red
-                                                                      .shade50
-                                                                ],
-                                                    ),
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                            15),
-                                                    border: Border.all(
-                                                      color:
-                                                          student['verified'] ==
-                                                                  'true'
-                                                              ? Colors.green
-                                                                  .shade300
-                                                              : Colors
-                                                                  .red.shade300,
-                                                      width: 1,
-                                                    ),
-                                                  ),
-                                                  child: Text(
-                                                    student['verified'] ==
-                                                            'true'
-                                                        ? 'सत्यापित'
-                                                        : 'असत्यापित',
-                                                    style: TextStyle(
-                                                      fontSize: 11,
-                                                      color:
-                                                          student['verified'] ==
-                                                                  'true'
-                                                              ? Colors
-                                                                  .green[800]
-                                                              : Colors.red[800],
-                                                      fontWeight:
-                                                          FontWeight.w600,
-                                                    ),
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 8),
                                                 if (needsPhotoUpdate)
                                                   IconButton(
                                                     icon: Icon(
@@ -1461,6 +2221,11 @@ class _StudentsDataScreenState extends State<StudentsDataScreen> {
                                                       student['udise_code']),
                                                   _buildDetailRow('पेड़ का नाम',
                                                       student['name_of_tree']),
+
+                                                  // Status text box
+                                                  const SizedBox(height: 12),
+                                                  _buildStatusTextBox(student),
+
                                                   // _buildDetailRow(
                                                   //     'पंजीकरण तिथि',
                                                   //     student['date'] != null
@@ -1468,12 +2233,6 @@ class _StudentsDataScreenState extends State<StudentsDataScreen> {
                                                   //             student['date']
                                                   //                 .toString())
                                                   //         : 'तारीख उपलब्ध नहीं'),
-                                                  _buildDetailRow(
-                                                      'वेरिफिकेशन स्टेटस',
-                                                      student['verified'] ==
-                                                              'true'
-                                                          ? 'सत्यापित'
-                                                          : 'असत्यापित'),
                                                   if (student['plant_image']
                                                           ?.toString()
                                                           .isNotEmpty ==
@@ -1481,13 +2240,6 @@ class _StudentsDataScreenState extends State<StudentsDataScreen> {
                                                     _buildPhotoRow(
                                                         'पौधे की फोटो',
                                                         student['plant_image']),
-                                                  if (student['certificate']
-                                                          ?.toString()
-                                                          .isNotEmpty ==
-                                                      true)
-                                                    _buildPhotoRow(
-                                                        'बच्चे और पौधे की फोटो',
-                                                        student['certificate']),
                                                   if (needsPhotoUpdate) ...[
                                                     const SizedBox(height: 12),
                                                     Container(
@@ -1591,6 +2343,104 @@ class _StudentsDataScreenState extends State<StudentsDataScreen> {
     );
   }
 
+  Widget _buildStatusTextBox(Map<String, dynamic> student) {
+    final statusController = _getStatusController(student);
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.blue.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.blue.withOpacity(0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.edit_note, color: Colors.blue, size: 20),
+              const SizedBox(width: 8),
+              const Text(
+                'पौधे की स्थिति:',
+                style: TextStyle(
+                  fontWeight: FontWeight.w500,
+                  color: Colors.blue,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: statusController,
+            maxLines: 2,
+            decoration: InputDecoration(
+              hintText: 'पौधे की स्थिति या नोट्स यहाँ लिखें...',
+              filled: true,
+              fillColor: Colors.white,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide: BorderSide(color: Colors.grey.shade300),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide: BorderSide(color: Colors.grey.shade300),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide: const BorderSide(color: Colors.blue),
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 8,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              if (student['status']?.toString().isNotEmpty == true) ...[
+                TextButton.icon(
+                  onPressed: () {
+                    statusController.clear();
+                    _updateStudentStatus(student, '');
+                  },
+                  icon: const Icon(Icons.clear, size: 16),
+                  label: const Text('साफ करें'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.grey,
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+              ElevatedButton.icon(
+                onPressed: () {
+                  final statusText = statusController.text.trim();
+                  if (statusText.isNotEmpty) {
+                    _updateStudentStatus(student, statusText);
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('कृपया स्थिति टेक्स्ट दर्ज करें'),
+                        backgroundColor: Colors.orange,
+                      ),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.save, size: 16),
+                label: const Text('सेव करें'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildPhotoRow(String label, dynamic imageUrl) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -1655,8 +2505,6 @@ class _StudentsDataScreenState extends State<StudentsDataScreen> {
     String title = 'फोटो देखें';
     if (imageUrl.contains('plant')) {
       title = '🌱 पौधे की फोटो';
-    } else if (imageUrl.contains('certificate')) {
-      title = '� बच्चे और पौधे की फोटो';
     }
 
     showDialog<void>(
